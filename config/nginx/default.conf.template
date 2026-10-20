@@ -1,0 +1,86 @@
+# Public TLS reverse-proxy configuration.
+server_tokens off;
+
+server {
+    listen 8080 default_server;
+    server_name ${CRF_PRODUCTION_DOMAIN};
+
+    location = /nginx-health {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location / {
+        return 308 ${CRF_PRODUCTION_WEB_ORIGIN}$request_uri;
+    }
+}
+
+server {
+    listen 8443 ssl default_server;
+    http2 on;
+    server_name ${CRF_PRODUCTION_DOMAIN};
+
+    # Resolve private services through Docker DNS at request time. This keeps
+    # Nginx working when either container is replaced and lets `nginx -t` run
+    # before its dependencies have started.
+    resolver 127.0.0.11 valid=30s ipv6=off;
+
+    ssl_certificate /etc/nginx/tls/fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:CRF:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    client_max_body_size 2m;
+
+    if ($host != "${CRF_PRODUCTION_DOMAIN}") {
+        return 421;
+    }
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Referrer-Policy "same-origin" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    proxy_hide_header Strict-Transport-Security;
+    proxy_hide_header Referrer-Policy;
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header X-Frame-Options;
+
+    location /api/ {
+        set $crf_backend_upstream backend:8080;
+        proxy_pass http://$crf_backend_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    location /healthz {
+        set $crf_backend_upstream backend:8080;
+        proxy_pass http://$crf_backend_upstream/healthz;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location / {
+        set $crf_frontend_upstream frontend:8080;
+        proxy_pass http://$crf_frontend_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+}

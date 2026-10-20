@@ -1,0 +1,13 @@
+.git
+.github
+.env
+.env.local
+.env.prod
+docker/.env
+docker/.env.production
+data
+docs
+frontend/node_modules
+frontend/dist
+backend/bin
+*.log

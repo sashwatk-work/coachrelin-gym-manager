@@ -1,0 +1,114 @@
+services:
+  backend:
+    environment:
+      DATABASE_URL: ${CRF_PRODUCTION_DATABASE_URL:?Set CRF_PRODUCTION_DATABASE_URL in docker/.env.production}
+      JWT_SECRET: ${CRF_PRODUCTION_JWT_SECRET:?Set CRF_PRODUCTION_JWT_SECRET in docker/.env.production}
+      COOKIE_SECURE: "true"
+      AUTO_MIGRATE: "true"
+      SEED_ON_START: "false"
+    ports: !reset []
+    expose:
+      - "8080"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - proxy_backend
+      - database
+
+  frontend:
+    user: "101:101"
+    ports: !reset []
+    expose:
+      - "8080"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - proxy_frontend
+
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${CRF_PRODUCTION_POSTGRES_PASSWORD:?Set CRF_PRODUCTION_POSTGRES_PASSWORD in docker/.env.production}
+      GYM_DB_PASSWORD: ${CRF_PRODUCTION_GYM_DB_PASSWORD:?Set CRF_PRODUCTION_GYM_DB_PASSWORD in docker/.env.production}
+    volumes:
+      - type: bind
+        source: ${CRF_PRODUCTION_POSTGRES_DATA_DIR:?Set an absolute production PostgreSQL data directory}
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
+    restart: unless-stopped
+    ports: !reset []
+    networks:
+      - database
+
+  nginx:
+    image: nginx:1.28-alpine
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    environment:
+      CRF_PRODUCTION_DOMAIN: ${CRF_PRODUCTION_DOMAIN:?Set the public domain in docker/.env.production}
+      CRF_PRODUCTION_WEB_ORIGIN: ${CRF_PRODUCTION_WEB_ORIGIN:?Set the public HTTPS origin in docker/.env.production}
+      NGINX_ENVSUBST_FILTER: CRF_PRODUCTION_(DOMAIN|WEB_ORIGIN)
+    ports:
+      - "${CRF_PRODUCTION_HTTP_PORT:-80}:8080"
+      - "${CRF_PRODUCTION_HTTPS_PORT:-443}:8443"
+    volumes:
+      - type: bind
+        source: ../config/nginx/default.conf.template
+        target: /etc/nginx/templates/default.conf.template
+        read_only: true
+      - type: bind
+        source: ${CRF_PRODUCTION_TLS_CERTIFICATE:?Set the TLS certificate path in docker/.env.production}
+        target: /etc/nginx/tls/fullchain.pem
+        read_only: true
+      - type: bind
+        source: ${CRF_PRODUCTION_TLS_PRIVATE_KEY:?Set the TLS private-key path in docker/.env.production}
+        target: /etc/nginx/tls/privkey.pem
+        read_only: true
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d
+      - /var/cache/nginx
+      - /var/run
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/nginx-health || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - edge
+      - proxy_backend
+      - proxy_frontend
+
+networks:
+  edge:
+  proxy_frontend:
+    internal: true
+  proxy_backend:
+    internal: true
+  database:
+    internal: true
